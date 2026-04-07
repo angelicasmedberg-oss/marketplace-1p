@@ -175,6 +175,10 @@ function LoginScreen({ onLogin }) {
 
 // ── Upload ────────────────────────────────────────────────────────────────────
 function UploadScreen({ onDataLoaded }) {
+  const [mode, setMode] = useState(null); // "csv" | "manual"
+
+
+  // CSV mode state
   const [tFile, setTFile] = useState(null);
   const [rFile, setRFile] = useState(null);
   const [days, setDays] = useState(29);
@@ -182,7 +186,14 @@ function UploadScreen({ onDataLoaded }) {
   const [loading, setLoading] = useState(false);
 
 
-  const handleLoad = async () => {
+  // Manual mode state
+  const [manual, setManual] = useState({
+    tCount:30, tOutput:50, rCount:23, rOutput:10, erCount:6, erOutput:2, days:29
+  });
+  const upM = (k,v) => setManual(p=>({...p,[k]:v}));
+
+
+  const handleCSVLoad = async () => {
     if (!tFile || !rFile) { setErr("Upload both CSV files first."); return; }
     setLoading(true); setErr("");
     try {
@@ -197,13 +208,29 @@ function UploadScreen({ onDataLoaded }) {
   };
 
 
+  const handleManualLoad = () => {
+    // Generate synthetic worker arrays from counts and total output
+    const makeWorkers = (count, totalOutput, prefix) =>
+      Array.from({ length: count }, (_, i) => ({
+        name: `${prefix} ${i+1}`,
+        state: "",
+        output: Math.round(totalOutput / count)
+      }));
+    onDataLoaded({
+      transcribers: makeWorkers(manual.tCount, manual.tOutput * manual.days, "Transcriber"),
+      reviewers:    makeWorkers(manual.rCount, manual.rOutput * manual.days, "Reviewer"),
+      ers:          makeWorkers(manual.erCount, manual.erOutput * manual.days, "ER"),
+      days: manual.days,
+    });
+  };
+
+
   const Zone = ({ label, hint, file, onFile }) => (
     <label style={{ display:"block", border:`2px dashed ${file?"#86efac":"#e2e8f0"}`,
       borderRadius:10, padding:"1.25rem", textAlign:"center", cursor:"pointer",
       background: file?"#f0fdf4":"#fafafa", marginBottom:16 }}>
       <input type="file" accept=".csv" style={{ display:"none" }} onChange={e=>onFile(e.target.files[0])} />
-      <p style={{ margin:"0 0 4px", fontSize:14, fontWeight:600,
-        color: file?"#16a34a":"#374151" }}>
+      <p style={{ margin:"0 0 4px", fontSize:14, fontWeight:600, color: file?"#16a34a":"#374151" }}>
         {file ? `✓  ${file.name}` : label}
       </p>
       <p style={{ margin:0, fontSize:12, color:"#94a3b8" }}>{hint}</p>
@@ -211,13 +238,64 @@ function UploadScreen({ onDataLoaded }) {
   );
 
 
-  return (
+  const MInput = ({ label, k, unit, hint }) => (
+    <div style={{ marginBottom:14 }}>
+      <div style={{ display:"flex", justifyContent:"space-between", marginBottom:4, fontSize:13 }}>
+        <span style={{ color:"#374151", fontWeight:500 }}>{label}</span>
+        {hint && <span style={{ color:"#94a3b8", fontSize:11 }}>{hint}</span>}
+      </div>
+      <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+        <input type="number" value={manual[k]} min={0}
+          onChange={e=>upM(k,+e.target.value)}
+          style={{ width:80, padding:"7px 10px", borderRadius:8,
+            border:"1px solid #e2e8f0", fontSize:14 }} />
+        {unit && <span style={{ fontSize:12, color:"#94a3b8" }}>{unit}</span>}
+      </div>
+    </div>
+  );
+
+
+  // Mode selection screen
+  if (!mode) return (
+    <div style={{ minHeight:"100vh", display:"flex", alignItems:"center",
+      justifyContent:"center", background:"#f8fafc" }}>
+      <div style={{ width:520, ...S.card, padding:"2rem" }}>
+        <h2 style={{ margin:"0 0 4px", fontSize:20, fontWeight:700 }}>Marketplace LP</h2>
+        <p style={{ margin:"0 0 1.5rem", fontSize:14, color:"#64748b" }}>How would you like to load data?</p>
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:12 }}>
+          {[
+            { id:"csv", title:"Upload CSVs", desc:"Load real worker data from your Metabase exports", icon:"↑" },
+            { id:"manual", title:"Manual input", desc:"Enter worker counts and output to run hypotheticals", icon:"✎" },
+          ].map(opt=>(
+            <button key={opt.id} onClick={()=>setMode(opt.id)} style={{
+              padding:"1.25rem", borderRadius:12, border:"1px solid #e2e8f0",
+              background:"white", cursor:"pointer", textAlign:"left",
+              transition:"border-color .15s" }}
+              onMouseEnter={e=>e.currentTarget.style.borderColor="#378ADD"}
+              onMouseLeave={e=>e.currentTarget.style.borderColor="#e2e8f0"}>
+              <p style={{ margin:"0 0 6px", fontSize:24 }}>{opt.icon}</p>
+              <p style={{ margin:"0 0 4px", fontSize:14, fontWeight:700 }}>{opt.title}</p>
+              <p style={{ margin:0, fontSize:12, color:"#64748b" }}>{opt.desc}</p>
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+
+
+  // CSV upload screen
+  if (mode === "csv") return (
     <div style={{ minHeight:"100vh", display:"flex", alignItems:"center",
       justifyContent:"center", background:"#f8fafc" }}>
       <div style={{ width:480, ...S.card, padding:"2rem" }}>
-        <h2 style={{ margin:"0 0 4px", fontSize:20, fontWeight:700 }}>Load workforce data</h2>
+        <button onClick={()=>setMode(null)} style={{ fontSize:13, color:"#64748b",
+          background:"none", border:"none", cursor:"pointer", marginBottom:16, padding:0 }}>
+          ← Back
+        </button>
+        <h2 style={{ margin:"0 0 4px", fontSize:20, fontWeight:700 }}>Upload CSV exports</h2>
         <p style={{ margin:"0 0 1.5rem", fontSize:14, color:"#64748b" }}>
-          Upload your Metabase CSV exports to run the model
+          Download from Metabase and upload here
         </p>
         {err && <div style={{ padding:"10px 14px", background:"#fef2f2", border:"1px solid #fecaca",
           borderRadius:8, fontSize:13, color:"#dc2626", marginBottom:16 }}>{err}</div>}
@@ -232,10 +310,66 @@ function UploadScreen({ onDataLoaded }) {
             style={{ width:70, padding:"6px 10px", borderRadius:8,
               border:"1px solid #e2e8f0", fontSize:14 }} />
         </div>
-        <button onClick={handleLoad} disabled={loading}
+        <button onClick={handleCSVLoad} disabled={loading}
           style={{ width:"100%", padding:"10px", background:"#1e293b", color:"white",
             border:"none", borderRadius:8, fontSize:14, fontWeight:600, cursor:"pointer" }}>
           {loading ? "Loading…" : "Run model →"}
+        </button>
+      </div>
+    </div>
+  );
+
+
+  // Manual input screen
+  return (
+    <div style={{ minHeight:"100vh", display:"flex", alignItems:"center",
+      justifyContent:"center", background:"#f8fafc" }}>
+      <div style={{ width:520, ...S.card, padding:"2rem" }}>
+        <button onClick={()=>setMode(null)} style={{ fontSize:13, color:"#64748b",
+          background:"none", border:"none", cursor:"pointer", marginBottom:16, padding:0 }}>
+          ← Back
+        </button>
+        <h2 style={{ margin:"0 0 4px", fontSize:20, fontWeight:700 }}>Manual input</h2>
+        <p style={{ margin:"0 0 1.5rem", fontSize:14, color:"#64748b" }}>
+          Enter hypothetical workforce numbers to run scenarios
+        </p>
+        <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr 1fr", gap:16, marginBottom:16 }}>
+          {[
+            { label:"Transcribers", k1:"tCount", k2:"tOutput", color:"#378ADD" },
+            { label:"Reviewers",    k1:"rCount", k2:"rOutput", color:"#1D9E75" },
+            { label:"Exec reviewers", k1:"erCount", k2:"erOutput", color:"#7F77DD" },
+          ].map(({label,k1,k2,color})=>(
+            <div key={label} style={{ padding:"12px", borderRadius:10,
+              border:"1px solid #e2e8f0", background:"#fafafa" }}>
+              <p style={{ margin:"0 0 10px", fontSize:12, fontWeight:700, color }}>{label}</p>
+              <div style={{ marginBottom:10 }}>
+                <label style={{ fontSize:11, color:"#94a3b8", display:"block", marginBottom:4 }}>Workers</label>
+                <input type="number" value={manual[k1]} min={0}
+                  onChange={e=>upM(k1,+e.target.value)}
+                  style={{ width:"100%", padding:"6px 8px", borderRadius:8,
+                    border:"1px solid #e2e8f0", fontSize:13, boxSizing:"border-box" }} />
+              </div>
+              <div>
+                <label style={{ fontSize:11, color:"#94a3b8", display:"block", marginBottom:4 }}>Output/day</label>
+                <input type="number" value={manual[k2]} min={0}
+                  onChange={e=>upM(k2,+e.target.value)}
+                  style={{ width:"100%", padding:"6px 8px", borderRadius:8,
+                    border:"1px solid #e2e8f0", fontSize:13, boxSizing:"border-box" }} />
+              </div>
+            </div>
+          ))}
+        </div>
+        <div style={{ marginBottom:20, display:"flex", alignItems:"center", gap:12 }}>
+          <label style={{ fontSize:13, fontWeight:500 }}>Days in period</label>
+          <input type="number" value={manual.days} min={1} max={365}
+            onChange={e=>upM("days",+e.target.value)}
+            style={{ width:70, padding:"6px 10px", borderRadius:8,
+              border:"1px solid #e2e8f0", fontSize:14 }} />
+        </div>
+        <button onClick={handleManualLoad}
+          style={{ width:"100%", padding:"10px", background:"#1e293b", color:"white",
+            border:"none", borderRadius:8, fontSize:14, fontWeight:600, cursor:"pointer" }}>
+          Run model →
         </button>
       </div>
     </div>
