@@ -251,7 +251,7 @@ function ModelApp({ data, onReload, onSignOut }) {
     const total = 6.8;
     return { surge: +(total * .077).toFixed(1), three: +(total * .056).toFixed(1), seven: +(total * .867).toFixed(1) };
   });
-  const [spd, setSpd] = useState({ t:15, r:60, er:50 });
+  const [spd, setSpd] = useState({ t:1, r:20, er:35 });
 
 
   const tOut  = transcribers.map(w=>w.output);
@@ -433,14 +433,14 @@ function ConfigureTab({ dem, spd, lp, totalDem, upD, upS, data }) {
       </Card>
       <Card>
         <h3 style={S.h3}>Processing speeds</h3>
-        <Slider label="Transcriber speed" value={spd.t} min={8} max={25}
+        <Slider label="Transcriber speed" value={spd.t} min={1} max={25}
           onChange={v=>upS("t",v)} disp={`${spd.t} subtasks/hr`} />
         <p style={{ margin:"-10px 0 12px", fontSize:11, color:"#94a3b8" }}>
           ≈ {Math.round(60/spd.t)} min/subtask
         </p>
-        <Slider label="Reviewer speed" value={spd.r} min={30} max={120} step={5}
+        <Slider label="Reviewer speed" value={spd.r} min={10} max={120} step={5}
           onChange={v=>upS("r",v)} disp={`${spd.r} audio-min/hr`} />
-        <Slider label="Exec reviewer speed" value={spd.er} min={30} max={100} step={5}
+        <Slider label="Exec reviewer speed" value={spd.er} min={10} max={100} step={5}
           onChange={v=>upS("er",v)} disp={`${spd.er} audio-min/hr`} />
       </Card>
       {ROLE_META.map(role=>{
