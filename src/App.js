@@ -8,7 +8,8 @@ import { createClient } from "@supabase/supabase-js";
 import Papa from "papaparse";
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip, Legend, ResponsiveContainer,
-  CartesianGrid, LineChart, Line, ReferenceLine, AreaChart, Area, ScatterChart, Scatter, ZAxis,
+  CartesianGrid, LineChart, Line, ReferenceLine, AreaChart, Area,
+  ScatterChart, Scatter, ZAxis,
 } from "recharts";
 
 
@@ -37,94 +38,62 @@ const pct = v => `${Math.round(v*100)}%`;
 
 
 // WER helpers
-const werTier = (wer, thresholds) => {
-  if (wer === null || wer === undefined) return "unknown";
-  if (wer < thresholds.great) return "great";
-  if (wer <= thresholds.bad)  return "ok";
-  return "bad";
-};
-const werColor  = tier => tier==="great"?"#16a34a":tier==="ok"?"#d97706":tier==="bad"?"#dc2626":"#94a3b8";
-const werBg     = tier => tier==="great"?"#dcfce7":tier==="ok"?"#fef9c3":tier==="bad"?"#fee2e2":"#f1f5f9";
-const werMult   = (wer, thresholds) => {
-  const t = werTier(wer, thresholds);
-  return t==="great"?1.0:t==="ok"?1.2:1.5;
-};
-const avgWer    = workers => {
-  const w = workers.filter(x=>x.wer!=null);
-  return w.length ? w.reduce((s,x)=>s+x.wer,0)/w.length : null;
-};
+const werTier  = (w,th) => w==null?"unknown":w<th.great?"great":w<=th.bad?"ok":"bad";
+const werColor = t => t==="great"?"#16a34a":t==="ok"?"#d97706":t==="bad"?"#dc2626":"#94a3b8";
+const werBg    = t => t==="great"?"#dcfce7":t==="ok"?"#fef9c3":t==="bad"?"#fee2e2":"#f1f5f9";
+const werMult  = (w,th) => { const t=werTier(w,th); return t==="great"?1.0:t==="ok"?1.2:1.5; };
+const avgWer   = ws => { const f=ws.filter(x=>x.wer!=null); return f.length?f.reduce((s,x)=>s+x.wer,0)/f.length:null; };
 
 
 // CSV parsers
-const parseCSV = (file) => new Promise((res,rej) =>
-  Papa.parse(file, { header:true, skipEmptyLines:true, dynamicTyping:true,
-    complete:r=>res(r.data), error:rej })
-);
+const parseCSV = f => new Promise((res,rej) =>
+  Papa.parse(f,{header:true,skipEmptyLines:true,dynamicTyping:true,complete:r=>res(r.data),error:rej}));
+
+
 function parseTranscribers(rows) {
-  return rows
-    .filter(r => +r.subtasks_completed > 0)
-    .map(r => ({
-      name:   r.transcriber_name || "Unknown",
-      output: +r.subtasks_completed,
-      wer:    r.avg_wer_pct != null ? +r.avg_wer_pct : null,
-    }))
-    .sort((a,b) => b.output-a.output);
+  return rows.filter(r=>+r.subtasks_completed>0)
+    .map(r=>({name:r.transcriber_name||"Unknown",output:+r.subtasks_completed,wer:r.avg_wer_pct!=null?+r.avg_wer_pct:null}))
+    .sort((a,b)=>b.output-a.output);
 }
 function parseReviewers(rows) {
-  const rev=[], er=[];
-  rows.filter(r => +r.reviews_completed > 0).forEach(r => {
-    const obj = {
-      name:   r.reviewer_name || "Unknown",
-      output: +r.reviews_completed,
-      wer:    r.avg_wer_pct != null ? +r.avg_wer_pct : null,
-    };
-    r.role==="EXECUTIVE_REVIEWER" ? er.push(obj) : rev.push(obj);
+  const rev=[],er=[];
+  rows.filter(r=>+r.reviews_completed>0).forEach(r=>{
+    const o={name:r.reviewer_name||"Unknown",output:+r.reviews_completed,wer:r.avg_wer_pct!=null?+r.avg_wer_pct:null};
+    r.role==="EXECUTIVE_REVIEWER"?er.push(o):rev.push(o);
   });
-  return {
-    reviewers:    rev.sort((a,b)=>b.output-a.output),
-    erReviewWork: er.sort((a,b)=>b.output-a.output),
-  };
+  return {reviewers:rev.sort((a,b)=>b.output-a.output),erReviewWork:er.sort((a,b)=>b.output-a.output)};
 }
 function parseERWork(rows) {
-  return rows
-    .filter(r => +r.reviews_completed > 0)
-    .map(r => ({
-      name:   r.reviewer_name || r.er_name || "Unknown",
-      output: +r.reviews_completed,
-      wer:    r.avg_wer_pct != null ? +r.avg_wer_pct : null,
-    }))
+  return rows.filter(r=>+r.reviews_completed>0)
+    .map(r=>({name:r.reviewer_name||r.er_name||"Unknown",output:+r.reviews_completed,wer:r.avg_wer_pct!=null?+r.avg_wer_pct:null}))
     .sort((a,b)=>b.output-a.output);
 }
 
 
 // LP engine
-function computeLP(dem, tOut, rOut, erOut, spd, days) {
-  const daily = arr => arr.length ? arr.reduce((s,v)=>s+v,0)/days : 0;
+function computeLP(dem, tOut, rOut, erOut, spd, days, avgAudioMin) {
+  const daily = arr => arr.length?arr.reduce((s,v)=>s+v,0)/days:0;
   const totalDem = dem.surge+dem.three+dem.seven;
-  const avgMinPerReview = totalDem>0
-    ? TIERS.reduce((s,t)=>s+(dem[t.id]/totalDem*t.avgMin),0) : 50;
+  const avgMin = avgAudioMin>0 ? avgAudioMin
+    : totalDem>0 ? TIERS.reduce((s,t)=>s+(dem[t.id]/totalDem*t.avgMin),0) : 50;
   const supH = {
     t:  daily(tOut)/spd.t,
-    r:  (daily(rOut)*avgMinPerReview)/spd.r,
-    er: (daily(erOut)*avgMinPerReview)/spd.er,
+    r:  (daily(rOut)*avgMin)/spd.r,
+    er: (daily(erOut)*avgMin)/spd.er,
   };
-  const tiers = TIERS.map(t => {
-    const D=dem[t.id], tau=t.avgSubtasks/spd.t, rho=t.avgMin/spd.r, eps=t.avgMin/spd.er;
+  const tiers = TIERS.map(t=>{
+    const D=dem[t.id],tau=t.avgSubtasks/spd.t,rho=avgMin/spd.r,eps=avgMin/spd.er;
     return {...t,D,tau,rho,eps,demT:D*tau,demR:D*rho,demE:D*eps};
   });
-  const demH = {
-    t:  tiers.reduce((s,t)=>s+t.demT,0),
-    r:  tiers.reduce((s,t)=>s+t.demR,0),
-    er: tiers.reduce((s,t)=>s+t.demE,0),
-  };
+  const demH = {t:tiers.reduce((s,t)=>s+t.demT,0),r:tiers.reduce((s,t)=>s+t.demR,0),er:tiers.reduce((s,t)=>s+t.demE,0)};
   const util = {
     t:  supH.t >0?demH.t/supH.t :Infinity,
     r:  supH.r >0?demH.r/supH.r :Infinity,
     er: supH.er>0?demH.er/supH.er:Infinity,
   };
-  const tat = tiers.map(t => {
+  const tat = tiers.map(t=>{
     const u=k=>Math.min(util[k],.999);
-    const wT=t.tau*waitMult(u("t")), wR=t.rho*waitMult(u("r")), wE=t.eps*waitMult(u("er"));
+    const wT=t.tau*waitMult(u("t")),wR=t.rho*waitMult(u("r")),wE=t.eps*waitMult(u("er"));
     const tot=t.tau+wT+t.rho+wR+t.eps+wE;
     return {...t,wT,wR,wE,tot,ok:tot<=t.tatTgt};
   });
@@ -134,11 +103,25 @@ function computeLP(dem, tOut, rOut, erOut, spd, days) {
 }
 
 
+// Staffing recommendation
+function staffingRec(lp, workers, roleId) {
+  const n = workers[roleId].length;
+  if (!n) return null;
+  const demHours = lp.demH[roleId];
+  const supHours = lp.supH[roleId];
+  const avgHrsPerWorker = n > 0 ? supHours / n : 0;
+  const needed = avgHrsPerWorker > 0 ? Math.ceil(demHours / avgHrsPerWorker) : null;
+  const current = n;
+  const gap = needed != null ? needed - current : null;
+  return { needed, current, gap, avgHrsPerWorker };
+}
+
+
 // Shared UI
 const S = {
-  page: {fontFamily:"system-ui,-apple-system,sans-serif",background:"#f8fafc",minHeight:"100vh",padding:"2rem 1rem"},
-  card: {background:"white",border:"1px solid #e2e8f0",borderRadius:12,padding:"1rem 1.25rem",marginBottom:0},
-  h3:   {margin:"0 0 14px",fontSize:15,fontWeight:600},
+  page:{fontFamily:"system-ui,-apple-system,sans-serif",background:"#f8fafc",minHeight:"100vh",padding:"2rem 1rem"},
+  card:{background:"white",border:"1px solid #e2e8f0",borderRadius:12,padding:"1rem 1.25rem",marginBottom:0},
+  h3:  {margin:"0 0 14px",fontSize:15,fontWeight:600},
 };
 const Card   = ({children,style={}}) => <div style={{...S.card,...style}}>{children}</div>;
 const Lbl    = ({children,color})    => <p style={{margin:"0 0 8px",fontSize:11,fontWeight:600,color:color||"#94a3b8",textTransform:"uppercase",letterSpacing:".07em"}}>{children}</p>;
@@ -147,38 +130,42 @@ const Tab    = ({active,onClick,children}) => <button onClick={onClick} style={{
 const Slider = ({label,value,min,max,step=1,onChange,disp}) => (
   <div style={{marginBottom:14}}>
     <div style={{display:"flex",justifyContent:"space-between",marginBottom:4,fontSize:13}}>
-      <span style={{color:"#64748b"}}>{label}</span>
-      <span style={{fontWeight:600}}>{disp??value}</span>
+      <span style={{color:"#64748b"}}>{label}</span><span style={{fontWeight:600}}>{disp??value}</span>
     </div>
-    <input type="range" min={min} max={max} step={step} value={value}
-      onChange={e=>onChange(+e.target.value)} style={{width:"100%",accentColor:"#378ADD"}} />
+    <input type="range" min={min} max={max} step={step} value={value} onChange={e=>onChange(+e.target.value)} style={{width:"100%",accentColor:"#378ADD"}} />
   </div>
 );
-const WerDot = ({wer, thresholds}) => {
-  if (wer==null) return null;
+const WerDot = ({wer,thresholds}) => {
+  if(wer==null) return null;
   const t=werTier(wer,thresholds);
-  return (
-    <span style={{display:"inline-flex",alignItems:"center",gap:3,padding:"1px 6px",borderRadius:999,fontSize:10,fontWeight:600,background:werBg(t),color:werColor(t),border:`1px solid ${werColor(t)}33`}}>
-      {wer.toFixed(1)}%
-    </span>
-  );
+  return <span style={{display:"inline-flex",alignItems:"center",gap:3,padding:"1px 6px",borderRadius:999,fontSize:10,fontWeight:600,background:werBg(t),color:werColor(t),border:`1px solid ${werColor(t)}33`}}>{wer.toFixed(1)}%</span>;
 };
+const NumInput = ({label,value,min=0,max,step=1,onChange,unit}) => (
+  <div>
+    <label style={{display:"block",fontSize:13,color:"#64748b",marginBottom:6}}>{label}</label>
+    <div style={{display:"flex",alignItems:"center",gap:8}}>
+      <input type="number" value={value} min={min} max={max} step={step} onChange={e=>onChange(+e.target.value)}
+        style={{width:"100%",padding:"8px 10px",borderRadius:8,border:"1px solid #e2e8f0",fontSize:14,boxSizing:"border-box"}} />
+      {unit&&<span style={{fontSize:12,color:"#94a3b8",whiteSpace:"nowrap"}}>{unit}</span>}
+    </div>
+  </div>
+);
 
 
-// Login
+// ── Login ────────────────────────────────────────────────────────────────────
 function LoginScreen() {
   const [email,setEmail]=useState(""), [pw,setPw]=useState(""), [err,setErr]=useState(""), [loading,setLoading]=useState(false);
-  const go=async()=>{ setLoading(true); setErr(""); const {error}=await supabase.auth.signInWithPassword({email,password:pw}); if(error){setErr(error.message);setLoading(false);} };
+  const go=async()=>{setLoading(true);setErr("");const{error}=await supabase.auth.signInWithPassword({email,password:pw});if(error){setErr(error.message);setLoading(false);}};
   return (
     <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"#f8fafc"}}>
       <div style={{width:380,...S.card,padding:"2rem"}}>
         <h2 style={{margin:"0 0 4px",fontSize:22,fontWeight:700}}>Marketplace LP</h2>
         <p style={{margin:"0 0 1.5rem",fontSize:14,color:"#64748b"}}>Sign in to continue</p>
         {err&&<div style={{padding:"10px 14px",background:"#fef2f2",border:"1px solid #fecaca",borderRadius:8,fontSize:13,color:"#dc2626",marginBottom:16}}>{err}</div>}
-        {[["Email","email",email,setEmail],["Password","password",pw,setPw]].map(([lbl,type,val,set])=>(
-          <div key={lbl} style={{marginBottom:14}}>
-            <label style={{display:"block",fontSize:13,fontWeight:500,marginBottom:6}}>{lbl}</label>
-            <input type={type} value={val} onChange={e=>set(e.target.value)} onKeyDown={e=>e.key==="Enter"&&go()}
+        {[["Email","email",email,setEmail],["Password","password",pw,setPw]].map(([l,t,v,s])=>(
+          <div key={l} style={{marginBottom:14}}>
+            <label style={{display:"block",fontSize:13,fontWeight:500,marginBottom:6}}>{l}</label>
+            <input type={t} value={v} onChange={e=>s(e.target.value)} onKeyDown={e=>e.key==="Enter"&&go()}
               style={{width:"100%",padding:"9px 12px",borderRadius:8,border:"1px solid #e2e8f0",fontSize:14,boxSizing:"border-box"}} />
           </div>
         ))}
@@ -191,11 +178,11 @@ function LoginScreen() {
 }
 
 
-// Upload
+// ── Upload ───────────────────────────────────────────────────────────────────
 function UploadScreen({onDataLoaded,defaultMode=null}) {
   const [mode,setMode]=useState(defaultMode);
-  const [tFile,setTFile]=useState(null), [rFile,setRFile]=useState(null), [erFile,setErFile]=useState(null);
-  const [days,setDays]=useState(29), [err,setErr]=useState(""), [loading,setLoading]=useState(false);
+  const [tFile,setTFile]=useState(null),[rFile,setRFile]=useState(null),[erFile,setErFile]=useState(null);
+  const [days,setDays]=useState(29),[err,setErr]=useState(""),[loading,setLoading]=useState(false);
   const [manual,setManual]=useState({tCount:30,tOutput:50,rCount:23,rOutput:10,erCount:6,erOutput:4,days:29});
   const upM=(k,v)=>setManual(p=>({...p,[k]:v}));
 
@@ -203,21 +190,21 @@ function UploadScreen({onDataLoaded,defaultMode=null}) {
   const handleCSVLoad=async()=>{
     if(!tFile||!rFile){setErr("Upload transcriber and reviewer files first.");return;}
     setLoading(true);setErr("");
-    try {
+    try{
       const res=await Promise.all([parseCSV(tFile),parseCSV(rFile),...(erFile?[parseCSV(erFile)]:[])]); 
       const transcribers=parseTranscribers(res[0]);
-      const {reviewers,erReviewWork}=parseReviewers(res[1]);
+      const{reviewers,erReviewWork}=parseReviewers(res[1]);
       const ers=erFile?parseERWork(res[2]):erReviewWork;
-      if(!transcribers.length) throw new Error("No transcriber rows found — check column names.");
-      if(!reviewers.length) throw new Error("No reviewer rows found — check column names.");
+      if(!transcribers.length)throw new Error("No transcriber rows found — check column names.");
+      if(!reviewers.length)throw new Error("No reviewer rows found — check column names.");
       onDataLoaded({transcribers,reviewers,erReviewWork,ers,days});
-    } catch(e){setErr(e.message||"Parse error — check CSV format.");}
+    }catch(e){setErr(e.message||"Parse error — check CSV format.");}
     setLoading(false);
   };
 
 
   const handleManualLoad=()=>{
-    const make=(count,total,prefix)=>Array.from({length:count},(_,i)=>({name:`${prefix} ${i+1}`,output:Math.round(total/count),wer:null}));
+    const make=(n,tot,pfx)=>Array.from({length:n},(_,i)=>({name:`${pfx} ${i+1}`,output:Math.round(tot/n),wer:null}));
     onDataLoaded({transcribers:make(manual.tCount,manual.tOutput*manual.days,"Transcriber"),reviewers:make(manual.rCount,manual.rOutput*manual.days,"Reviewer"),erReviewWork:[],ers:make(manual.erCount,manual.erOutput*manual.days,"ER"),days:manual.days});
   };
 
@@ -239,13 +226,13 @@ function UploadScreen({onDataLoaded,defaultMode=null}) {
         <h2 style={{margin:"0 0 4px",fontSize:20,fontWeight:700}}>Marketplace LP</h2>
         <p style={{margin:"0 0 1.5rem",fontSize:14,color:"#64748b"}}>How would you like to load data?</p>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
-          {[{id:"csv",title:"Upload CSVs",desc:"Load real worker data from your Metabase exports",icon:"↑"},{id:"manual",title:"Manual input",desc:"Enter worker counts and output to run hypotheticals",icon:"✎"}].map(opt=>(
-            <button key={opt.id} onClick={()=>setMode(opt.id)} style={{padding:"1.25rem",borderRadius:12,border:"1px solid #e2e8f0",background:"white",cursor:"pointer",textAlign:"left"}}
+          {[{id:"csv",title:"Upload CSVs",desc:"Load real worker data from your Metabase exports",icon:"↑"},{id:"manual",title:"Manual input",desc:"Enter worker counts and output to run hypotheticals",icon:"✎"}].map(o=>(
+            <button key={o.id} onClick={()=>setMode(o.id)} style={{padding:"1.25rem",borderRadius:12,border:"1px solid #e2e8f0",background:"white",cursor:"pointer",textAlign:"left"}}
               onMouseEnter={e=>e.currentTarget.style.borderColor="#378ADD"}
               onMouseLeave={e=>e.currentTarget.style.borderColor="#e2e8f0"}>
-              <p style={{margin:"0 0 6px",fontSize:24}}>{opt.icon}</p>
-              <p style={{margin:"0 0 4px",fontSize:14,fontWeight:700}}>{opt.title}</p>
-              <p style={{margin:0,fontSize:12,color:"#64748b"}}>{opt.desc}</p>
+              <p style={{margin:"0 0 6px",fontSize:24}}>{o.icon}</p>
+              <p style={{margin:"0 0 4px",fontSize:14,fontWeight:700}}>{o.title}</p>
+              <p style={{margin:0,fontSize:12,color:"#64748b"}}>{o.desc}</p>
             </button>
           ))}
         </div>
@@ -316,13 +303,14 @@ function UploadScreen({onDataLoaded,defaultMode=null}) {
 }
 
 
-// Model app
+// ── Model app ────────────────────────────────────────────────────────────────
 function ModelApp({data,onReload,onManual,onSignOut}) {
   const {transcribers,reviewers,ers,days}=data;
   const [tab,setTab]=useState("results");
   const [dem,setDem]=useState({surge:.5,three:.4,seven:5.9});
   const [spd,setSpd]=useState({t:1,r:20,er:35});
   const [wer,setWer]=useState({great:1.5,bad:3.5});
+  const [vol,setVol]=useState({monthlyTranscripts:196,monthlyAudioMin:9800,days:29});
 
 
   const tOut=transcribers.map(w=>w.output);
@@ -330,7 +318,12 @@ function ModelApp({data,onReload,onManual,onSignOut}) {
   const erOut=ers.map(w=>w.output);
 
 
-  const lp  =useMemo(()=>computeLP(dem,tOut,rOut,erOut,spd,days),[dem,spd,tOut,rOut,erOut,days]);
+  const avgAudioMin = vol.monthlyTranscripts>0 ? vol.monthlyAudioMin/vol.monthlyTranscripts : 50;
+  const dailyTranscripts = vol.monthlyTranscripts/vol.days;
+  const dailyAudioMin    = vol.monthlyAudioMin/vol.days;
+
+
+  const lp  =useMemo(()=>computeLP(dem,tOut,rOut,erOut,spd,days,avgAudioMin),[dem,spd,tOut,rOut,erOut,days,avgAudioMin]);
   const sens=useMemo(()=>
     [50,60,70,75,80,85,90,95,100,110,120,130,150,175,200].map(p=>({
       vol:`${p}%`,T:Math.round(lp.util.t*p),R:Math.round(lp.util.r*p),ER:Math.round(lp.util.er*p)
@@ -339,7 +332,18 @@ function ModelApp({data,onReload,onManual,onSignOut}) {
 
   const upD=(k,v)=>setDem(p=>({...p,[k]:v}));
   const upS=(k,v)=>setSpd(p=>({...p,[k]:v}));
+  const upV=(k,v)=>setVol(p=>({...p,[k]:v}));
   const bn=ROLE_META.find(r=>r.id===lp.bnId);
+
+
+  const workerMap={t:transcribers,r:reviewers,er:ers};
+  const rec={
+    t:  staffingRec(lp,workerMap,"t"),
+    r:  staffingRec(lp,workerMap,"r"),
+    er: staffingRec(lp,workerMap,"er"),
+  };
+
+
   const TABS=[["results","Results"],["whatif","What-if"],["configure","Configure"],["sensitivity","Sensitivity"],["concentration","Concentration"]];
 
 
@@ -374,9 +378,9 @@ function ModelApp({data,onReload,onManual,onSignOut}) {
       </div>
 
 
-      {tab==="results"      && <ResultsTab lp={lp} />}
-      {tab==="whatif"       && <WhatIfTab data={data} spd={spd} dem={dem} werThresholds={wer} />}
-      {tab==="configure"    && <ConfigureTab dem={dem} spd={spd} wer={wer} lp={lp} totalDem={dem.surge+dem.three+dem.seven} upD={upD} upS={upS} setWer={setWer} data={data} />}
+      {tab==="results"      && <ResultsTab lp={lp} rec={rec} avgAudioMin={avgAudioMin} dailyTranscripts={dailyTranscripts} dailyAudioMin={dailyAudioMin} vol={vol} />}
+      {tab==="whatif"       && <WhatIfTab data={data} spd={spd} dem={dem} werThresholds={wer} avgAudioMin={avgAudioMin} />}
+      {tab==="configure"    && <ConfigureTab dem={dem} spd={spd} wer={wer} vol={vol} lp={lp} totalDem={dem.surge+dem.three+dem.seven} upD={upD} upS={upS} upV={upV} setWer={setWer} data={data} avgAudioMin={avgAudioMin} dailyTranscripts={dailyTranscripts} dailyAudioMin={dailyAudioMin} />}
       {tab==="sensitivity"  && <SensitivityTab sens={sens} />}
       {tab==="concentration"&& <ConcentrationTab data={data} werThresholds={wer} />}
     </div>
@@ -384,11 +388,14 @@ function ModelApp({data,onReload,onManual,onSignOut}) {
 }
 
 
-// Results tab
-function ResultsTab({lp}) {
+// ── Results ──────────────────────────────────────────────────────────────────
+function ResultsTab({lp,rec,avgAudioMin,dailyTranscripts,dailyAudioMin,vol}) {
   const capData=ROLE_META.map(r=>({name:r.label.split(" ")[0],Supply:r1(lp.supH[r.id]),Demand:r1(lp.demH[r.id])}));
   return (
     <div style={{display:"flex",flexDirection:"column",gap:14}}>
+
+
+      {/* Utilization cards */}
       <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12}}>
         {ROLE_META.map(role=>{
           const u=lp.util[role.id],pv=Math.round(u*100);
@@ -406,6 +413,41 @@ function ResultsTab({lp}) {
           );
         })}
       </div>
+
+
+      {/* Staffing recommendations */}
+      <Card>
+        <Lbl>Staffing recommendations</Lbl>
+        <p style={{margin:"-4px 0 14px",fontSize:12,color:"#64748b"}}>
+          Based on current demand and average hours per worker in your pool. Assumes new workers contribute at the same average rate.
+        </p>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12}}>
+          {ROLE_META.map(role=>{
+            const r=rec[role.id];
+            if(!r) return null;
+            const ok=r.gap<=0;
+            return (
+              <div key={role.id} style={{padding:"14px",borderRadius:10,background:ok?"#f0fdf4":"#fef2f2",border:`1px solid ${ok?"#bbf7d0":"#fecaca"}`}}>
+                <p style={{margin:"0 0 8px",fontSize:11,fontWeight:700,color:role.hex,textTransform:"uppercase",letterSpacing:".06em"}}>{role.label}</p>
+                <div style={{display:"flex",alignItems:"baseline",gap:6,marginBottom:4}}>
+                  <span style={{fontSize:28,fontWeight:700,color:ok?"#166534":"#dc2626"}}>{r.needed ?? "—"}</span>
+                  <span style={{fontSize:13,color:"#64748b"}}>workers needed</span>
+                </div>
+                <p style={{margin:"0 0 6px",fontSize:12,color:"#64748b"}}>currently have <b style={{fontWeight:600}}>{r.current}</b></p>
+                <div style={{padding:"6px 10px",borderRadius:8,background:ok?"#dcfce7":"#fee2e2",fontSize:12,fontWeight:600,color:ok?"#166534":"#dc2626",textAlign:"center"}}>
+                  {ok?`✓ ${Math.abs(r.gap)} surplus`:`+${r.gap} needed`}
+                </div>
+                <p style={{margin:"8px 0 0",fontSize:11,color:"#94a3b8"}}>
+                  avg {fmt(r.avgHrsPerWorker)}h/worker/day
+                </p>
+              </div>
+            );
+          })}
+        </div>
+      </Card>
+
+
+      {/* Supply vs demand chart */}
       <Card>
         <Lbl>Supply vs. demand (worker-hours/day)</Lbl>
         <div style={{height:200}}>
@@ -422,6 +464,28 @@ function ResultsTab({lp}) {
           </ResponsiveContainer>
         </div>
       </Card>
+
+
+      {/* Volume summary */}
+      <Card>
+        <Lbl>Volume summary</Lbl>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12,marginBottom:0}}>
+          {[
+            {label:"Daily transcripts",val:`${dailyTranscripts.toFixed(1)}/day`,sub:`${vol.monthlyTranscripts} monthly`,hex:"#378ADD"},
+            {label:"Daily audio minutes",val:`${Math.round(dailyAudioMin)} min`,sub:`${vol.monthlyAudioMin.toLocaleString()} monthly`,hex:"#1D9E75"},
+            {label:"Avg per transcript",val:`${Math.round(avgAudioMin)} min`,sub:"audio minutes",hex:"#7F77DD"},
+          ].map(({label,val,sub,hex})=>(
+            <div key={label} style={{padding:"12px",borderRadius:10,background:"#f8fafc",border:"1px solid #e2e8f0"}}>
+              <p style={{margin:"0 0 4px",fontSize:11,color:"#94a3b8",fontWeight:600,textTransform:"uppercase",letterSpacing:".05em"}}>{label}</p>
+              <p style={{margin:"0 0 2px",fontSize:20,fontWeight:700,color:hex}}>{val}</p>
+              <p style={{margin:0,fontSize:11,color:"#94a3b8"}}>{sub}</p>
+            </div>
+          ))}
+        </div>
+      </Card>
+
+
+      {/* TAT by tier */}
       <Card>
         <Lbl>TAT estimate by tier</Lbl>
         <div style={{display:"flex",flexDirection:"column",gap:10}}>
@@ -442,8 +506,7 @@ function ResultsTab({lp}) {
               <div style={{display:"flex",gap:12,marginTop:6,flexWrap:"wrap"}}>
                 {[["#378ADD","Transcription",t.tau],["#bfdbfe","T-queue",t.wT],["#1D9E75","Review",t.rho],["#bbf7d0","R-queue",t.wR],["#7F77DD","ER",t.eps],["#ddd6fe","ER-queue",t.wE]].map(([c,l,v])=>(
                   <span key={l} style={{display:"flex",alignItems:"center",gap:4,fontSize:11,color:"#64748b"}}>
-                    <span style={{width:8,height:8,borderRadius:2,background:c,display:"inline-block"}} />
-                    {l}: {fmt(v)}h
+                    <span style={{width:8,height:8,borderRadius:2,background:c,display:"inline-block"}} />{l}: {fmt(v)}h
                   </span>
                 ))}
               </div>
@@ -451,6 +514,8 @@ function ResultsTab({lp}) {
           ))}
         </div>
       </Card>
+
+
       {lp.util.er>1&&(
         <div style={{padding:"12px 16px",borderRadius:10,background:"#fef9c3",border:"1px solid #fde68a",fontSize:13,color:"#92400e"}}>
           <b>ER coverage gap:</b> At current volume, only {Math.round(1/lp.util.er*100)}% of transcripts can receive executive review.
@@ -461,70 +526,96 @@ function ResultsTab({lp}) {
 }
 
 
-// Configure tab
-function ConfigureTab({dem,spd,wer,lp,totalDem,upD,upS,setWer,data}) {
+// ── Configure ────────────────────────────────────────────────────────────────
+function ConfigureTab({dem,spd,wer,vol,lp,totalDem,upD,upS,upV,setWer,data,avgAudioMin,dailyTranscripts,dailyAudioMin}) {
   return (
-    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
+    <div style={{display:"flex",flexDirection:"column",gap:14}}>
+
+
+      {/* Volume & audio mix — full width */}
       <Card>
-        <h3 style={S.h3}>Daily demand by TAT tier</h3>
-        <Slider label="Surge 24hr" value={dem.surge} min={0} max={15} step={.1} onChange={v=>upD("surge",v)} disp={`${dem.surge.toFixed(1)}/day`} />
-        <Slider label="Three-day"  value={dem.three} min={0} max={30} step={.1} onChange={v=>upD("three",v)} disp={`${dem.three.toFixed(1)}/day`} />
-        <Slider label="Seven-day"  value={dem.seven} min={0} max={60} step={.1} onChange={v=>upD("seven",v)} disp={`${dem.seven.toFixed(1)}/day`} />
-        <p style={{margin:"8px 0 0",fontSize:12,color:"#64748b"}}>Total: <b>{totalDem.toFixed(1)} transcripts/day</b></p>
-      </Card>
-      <Card>
-        <h3 style={S.h3}>Processing speeds</h3>
-        <Slider label="Transcriber speed" value={spd.t} min={1} max={25} onChange={v=>upS("t",v)} disp={`${spd.t} subtasks/hr`} />
-        <p style={{margin:"-10px 0 12px",fontSize:11,color:"#94a3b8"}}>≈ {Math.round(60/spd.t)} min/subtask</p>
-        <Slider label="Reviewer speed"      value={spd.r}  min={10} max={120} step={5} onChange={v=>upS("r",v)}  disp={`${spd.r} audio-min/hr`} />
-        <Slider label="Exec reviewer speed" value={spd.er} min={10} max={100} step={5} onChange={v=>upS("er",v)} disp={`${spd.er} audio-min/hr`} />
-      </Card>
-      <Card>
-        <h3 style={S.h3}>WER quality thresholds</h3>
-        <p style={{margin:"-6px 0 12px",fontSize:12,color:"#64748b"}}>Used to classify workers and calculate ER rework burden</p>
-        <div style={{display:"flex",gap:12,marginBottom:14}}>
-          <div style={{flex:1}}>
-            <label style={{fontSize:13,color:"#64748b",display:"block",marginBottom:6}}>Great — below (%)</label>
-            <input type="number" value={wer.great} min={0} max={10} step={.1}
-              onChange={e=>setWer(p=>({...p,great:+e.target.value}))}
-              style={{width:"100%",padding:"8px 10px",borderRadius:8,border:"1px solid #e2e8f0",fontSize:14,boxSizing:"border-box"}} />
-          </div>
-          <div style={{flex:1}}>
-            <label style={{fontSize:13,color:"#64748b",display:"block",marginBottom:6}}>Bad — above (%)</label>
-            <input type="number" value={wer.bad} min={0} max={20} step={.1}
-              onChange={e=>setWer(p=>({...p,bad:+e.target.value}))}
-              style={{width:"100%",padding:"8px 10px",borderRadius:8,border:"1px solid #e2e8f0",fontSize:14,boxSizing:"border-box"}} />
-          </div>
+        <h3 style={S.h3}>Volume & audio mix</h3>
+        <p style={{margin:"-6px 0 14px",fontSize:12,color:"#64748b"}}>Update monthly from your TAT dashboard. Drives daily demand and all reviewer/ER capacity calculations.</p>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:16,marginBottom:16}}>
+          <NumInput label="Monthly transcripts ordered" value={vol.monthlyTranscripts} min={1} onChange={v=>upV("monthlyTranscripts",v)} unit="transcripts" />
+          <NumInput label="Monthly audio minutes ordered" value={vol.monthlyAudioMin} min={1} onChange={v=>upV("monthlyAudioMin",v)} unit="audio min" />
+          <NumInput label="Days in period" value={vol.days} min={1} max={365} onChange={v=>upV("days",v)} unit="days" />
         </div>
-        <div style={{display:"flex",gap:8}}>
-          {[["great","< "+wer.great+"%","#dcfce7","#16a34a"],["ok",wer.great+"–"+wer.bad+"%","#fef9c3","#d97706"],["bad","> "+wer.bad+"%","#fee2e2","#dc2626"]].map(([t,l,bg,c])=>(
-            <div key={t} style={{flex:1,padding:"6px 10px",borderRadius:8,background:bg,textAlign:"center",fontSize:12,fontWeight:600,color:c}}>{l}</div>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12}}>
+          {[
+            {label:"Daily transcripts",val:`${dailyTranscripts.toFixed(1)}/day`,hex:"#378ADD"},
+            {label:"Daily audio minutes",val:`${Math.round(dailyAudioMin)} min/day`,hex:"#1D9E75"},
+            {label:"Avg audio min / transcript",val:`${Math.round(avgAudioMin)} min`,hex:"#7F77DD"},
+          ].map(({label,val,hex})=>(
+            <div key={label} style={{padding:"10px 12px",borderRadius:8,background:"#f8fafc",border:"1px solid #e2e8f0"}}>
+              <p style={{margin:"0 0 4px",fontSize:11,color:"#94a3b8",fontWeight:600,textTransform:"uppercase",letterSpacing:".05em"}}>{label}</p>
+              <p style={{margin:0,fontSize:18,fontWeight:700,color:hex}}>{val}</p>
+            </div>
           ))}
         </div>
       </Card>
-      {ROLE_META.map(role=>{
-        const workers=role.id==="t"?data.transcribers:role.id==="r"?data.reviewers:data.ers;
-        const total=workers.reduce((s,w)=>s+w.output,0);
-        return (
-          <Card key={role.id}>
-            <h3 style={{...S.h3,color:role.hex}}>{role.label}</h3>
-            <p style={{margin:"0 0 10px",fontSize:13,color:"#64748b"}}>
-              <b style={{fontWeight:600}}>{workers.length} active workers</b> · {total} total output in period
-            </p>
-            <div style={{padding:"10px 12px",borderRadius:8,background:role.bg,fontSize:12,color:role.tx}}>
-              Utilization: <b>{pct(lp.util[role.id])}</b> ·{" "}
-              {lp.util[role.id]<=1?`${Math.round((1-lp.util[role.id])*100)}% headroom`:`${Math.round((lp.util[role.id]-1)*100)}% over capacity`}
+
+
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
+        <Card>
+          <h3 style={S.h3}>Daily demand by TAT tier</h3>
+          <Slider label="Surge 24hr" value={dem.surge} min={0} max={15} step={.1} onChange={v=>upD("surge",v)} disp={`${dem.surge.toFixed(1)}/day`} />
+          <Slider label="Three-day"  value={dem.three} min={0} max={30} step={.1} onChange={v=>upD("three",v)} disp={`${dem.three.toFixed(1)}/day`} />
+          <Slider label="Seven-day"  value={dem.seven} min={0} max={60} step={.1} onChange={v=>upD("seven",v)} disp={`${dem.seven.toFixed(1)}/day`} />
+          <p style={{margin:"8px 0 0",fontSize:12,color:"#64748b"}}>Total: <b>{totalDem.toFixed(1)} transcripts/day</b></p>
+        </Card>
+        <Card>
+          <h3 style={S.h3}>Processing speeds</h3>
+          <Slider label="Transcriber speed" value={spd.t} min={1} max={25} onChange={v=>upS("t",v)} disp={`${spd.t} subtasks/hr`} />
+          <p style={{margin:"-10px 0 12px",fontSize:11,color:"#94a3b8"}}>≈ {Math.round(60/spd.t)} min/subtask</p>
+          <Slider label="Reviewer speed"      value={spd.r}  min={10} max={120} step={5} onChange={v=>upS("r",v)}  disp={`${spd.r} audio-min/hr`} />
+          <Slider label="Exec reviewer speed" value={spd.er} min={10} max={100} step={5} onChange={v=>upS("er",v)} disp={`${spd.er} audio-min/hr`} />
+        </Card>
+        <Card>
+          <h3 style={S.h3}>WER quality thresholds</h3>
+          <p style={{margin:"-6px 0 12px",fontSize:12,color:"#64748b"}}>Classifies workers and calculates ER rework burden</p>
+          <div style={{display:"flex",gap:12,marginBottom:14}}>
+            <div style={{flex:1}}>
+              <label style={{fontSize:13,color:"#64748b",display:"block",marginBottom:6}}>Great — below (%)</label>
+              <input type="number" value={wer.great} min={0} max={10} step={.1} onChange={e=>setWer(p=>({...p,great:+e.target.value}))}
+                style={{width:"100%",padding:"8px 10px",borderRadius:8,border:"1px solid #e2e8f0",fontSize:14,boxSizing:"border-box"}} />
             </div>
-          </Card>
-        );
-      })}
+            <div style={{flex:1}}>
+              <label style={{fontSize:13,color:"#64748b",display:"block",marginBottom:6}}>Bad — above (%)</label>
+              <input type="number" value={wer.bad} min={0} max={20} step={.1} onChange={e=>setWer(p=>({...p,bad:+e.target.value}))}
+                style={{width:"100%",padding:"8px 10px",borderRadius:8,border:"1px solid #e2e8f0",fontSize:14,boxSizing:"border-box"}} />
+            </div>
+          </div>
+          <div style={{display:"flex",gap:8}}>
+            {[["great","< "+wer.great+"%","#dcfce7","#16a34a"],["ok",wer.great+"–"+wer.bad+"%","#fef9c3","#d97706"],["bad","> "+wer.bad+"%","#fee2e2","#dc2626"]].map(([t,l,bg,c])=>(
+              <div key={t} style={{flex:1,padding:"6px 10px",borderRadius:8,background:bg,textAlign:"center",fontSize:12,fontWeight:600,color:c}}>{l}</div>
+            ))}
+          </div>
+        </Card>
+        {ROLE_META.map(role=>{
+          const workers=role.id==="t"?data.transcribers:role.id==="r"?data.reviewers:data.ers;
+          const total=workers.reduce((s,w)=>s+w.output,0);
+          return (
+            <Card key={role.id}>
+              <h3 style={{...S.h3,color:role.hex}}>{role.label}</h3>
+              <p style={{margin:"0 0 10px",fontSize:13,color:"#64748b"}}>
+                <b style={{fontWeight:600}}>{workers.length} active workers</b> · {total} total output in period
+              </p>
+              <div style={{padding:"10px 12px",borderRadius:8,background:role.bg,fontSize:12,color:role.tx}}>
+                Utilization: <b>{pct(lp.util[role.id])}</b> ·{" "}
+                {lp.util[role.id]<=1?`${Math.round((1-lp.util[role.id])*100)}% headroom`:`${Math.round((lp.util[role.id]-1)*100)}% over capacity`}
+              </div>
+            </Card>
+          );
+        })}
+      </div>
     </div>
   );
 }
 
 
-// What-if tab
-function WhatIfTab({data,spd,dem,werThresholds}) {
+// ── What-if ──────────────────────────────────────────────────────────────────
+function WhatIfTab({data,spd,dem,werThresholds,avgAudioMin}) {
   const {transcribers,reviewers,ers,days}=data;
   const [removed,setRemoved]=useState({t:[],r:[],er:[]});
   const toggle=(role,idx)=>setRemoved(prev=>{const s=new Set(prev[role]);s.has(idx)?s.delete(idx):s.add(idx);return {...prev,[role]:[...s]};});
@@ -532,25 +623,21 @@ function WhatIfTab({data,spd,dem,werThresholds}) {
   const effWorkers=(role,workers)=>workers.filter((_,i)=>!removed[role].includes(i));
   const effOut=(role,workers)=>effWorkers(role,workers).map(w=>w.output);
   const tOut=effOut("t",transcribers),rOut=effOut("r",reviewers),erOut=effOut("er",ers);
-  const simLP =useMemo(()=>computeLP(dem,tOut,rOut,erOut,spd,days),[removed,dem,spd]);
-  const baseLP=useMemo(()=>computeLP(dem,transcribers.map(w=>w.output),reviewers.map(w=>w.output),ers.map(w=>w.output),spd,days),[dem,spd]);
+  const simLP =useMemo(()=>computeLP(dem,tOut,rOut,erOut,spd,days,avgAudioMin),[removed,dem,spd,avgAudioMin]);
+  const baseLP=useMemo(()=>computeLP(dem,transcribers.map(w=>w.output),reviewers.map(w=>w.output),ers.map(w=>w.output),spd,days,avgAudioMin),[dem,spd,avgAudioMin]);
   const totalRemoved=removed.t.length+removed.r.length+removed.er.length;
 
 
-  // Quality impact calculations
-  const activeT=effWorkers("t",transcribers), activeR=effWorkers("r",reviewers);
-  const baseT=transcribers, baseR=reviewers;
-  const avgWerT_active=avgWer(activeT), avgWerT_base=avgWer(baseT);
-  const avgWerR_active=avgWer(activeR), avgWerR_base=avgWer(baseR);
-  const multT_active=avgWerT_active!=null?werMult(avgWerT_active,werThresholds):1;
-  const multR_active=avgWerR_active!=null?werMult(avgWerR_active,werThresholds):1;
-  const multT_base=avgWerT_base!=null?werMult(avgWerT_base,werThresholds):1;
-  const multR_base=avgWerR_base!=null?werMult(avgWerR_base,werThresholds):1;
-  const reworkMultActive=multT_active*multR_active;
-  const reworkMultBase=multT_base*multR_base;
-  const erHoursBase=baseLP.demH.er;
-  const erHoursActive=erHoursBase*reworkMultActive;
-  const erHoursSaved=erHoursBase*reworkMultBase-erHoursActive;
+  const activeT=effWorkers("t",transcribers),activeR=effWorkers("r",reviewers);
+  const avgWerT_a=avgWer(activeT),avgWerR_a=avgWer(activeR);
+  const avgWerT_b=avgWer(transcribers),avgWerR_b=avgWer(reviewers);
+  const mTA=avgWerT_a!=null?werMult(avgWerT_a,werThresholds):1;
+  const mRA=avgWerR_a!=null?werMult(avgWerR_a,werThresholds):1;
+  const mTB=avgWerT_b!=null?werMult(avgWerT_b,werThresholds):1;
+  const mRB=avgWerR_b!=null?werMult(avgWerR_b,werThresholds):1;
+  const reworkA=mTA*mRA, reworkB=mTB*mRB;
+  const erBase=baseLP.demH.er;
+  const erHoursA=erBase*reworkA, erSaved=erBase*reworkB-erHoursA;
 
 
   const WorkerList=({role,workers})=>{
@@ -621,7 +708,6 @@ function WhatIfTab({data,spd,dem,werThresholds}) {
       </div>
 
 
-      {/* TAT Impact */}
       <Card>
         <Lbl>TAT impact — baseline vs. scenario</Lbl>
         <div style={{display:"flex",flexDirection:"column",gap:10}}>
@@ -655,17 +741,14 @@ function WhatIfTab({data,spd,dem,werThresholds}) {
       </Card>
 
 
-      {/* Quality Impact */}
       <Card>
         <Lbl>Quality impact — ER rework burden</Lbl>
-        <p style={{margin:"-4px 0 14px",fontSize:12,color:"#64748b"}}>
-          Based on WER scores of active transcribers and reviewers. Higher combined WER = more ER rework time.
-        </p>
+        <p style={{margin:"-4px 0 14px",fontSize:12,color:"#64748b"}}>Based on WER of active transcribers and reviewers. Higher combined WER = more ER rework time.</p>
         <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12,marginBottom:14}}>
           {[
-            {label:"Avg transcriber WER",base:avgWerT_base,active:avgWerT_active,hex:"#378ADD"},
-            {label:"Avg reviewer WER",base:avgWerR_base,active:avgWerR_active,hex:"#1D9E75"},
-            {label:"Combined ER rework multiplier",base:reworkMultBase,active:reworkMultActive,hex:"#7F77DD",isMult:true},
+            {label:"Avg transcriber WER",base:avgWerT_b,active:avgWerT_a,hex:"#378ADD"},
+            {label:"Avg reviewer WER",base:avgWerR_b,active:avgWerR_a,hex:"#1D9E75"},
+            {label:"Combined ER rework multiplier",base:reworkB,active:reworkA,hex:"#7F77DD",isMult:true},
           ].map(({label,base,active,hex,isMult})=>{
             const changed=active!=null&&base!=null&&Math.abs(active-base)>.01;
             const better=active!=null&&base!=null&&active<base;
@@ -683,31 +766,23 @@ function WhatIfTab({data,spd,dem,werThresholds}) {
             );
           })}
         </div>
-
-
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
           <div style={{padding:"12px",borderRadius:10,background:"#f5f3ff",border:"1px solid #ddd6fe"}}>
             <p style={{margin:"0 0 4px",fontSize:11,color:"#7F77DD",fontWeight:600,textTransform:"uppercase",letterSpacing:".05em"}}>Estimated ER hours/day at current quality</p>
-            <p style={{margin:"0 0 2px",fontSize:22,fontWeight:700,color:"#7F77DD"}}>{fmt(erHoursActive)}h</p>
-            <p style={{margin:0,fontSize:11,color:"#94a3b8"}}>base {fmt(erHoursBase)}h × {reworkMultActive.toFixed(2)}× rework</p>
+            <p style={{margin:"0 0 2px",fontSize:22,fontWeight:700,color:"#7F77DD"}}>{fmt(erHoursA)}h</p>
+            <p style={{margin:0,fontSize:11,color:"#94a3b8"}}>base {fmt(erBase)}h × {reworkA.toFixed(2)}× rework</p>
           </div>
-          <div style={{padding:"12px",borderRadius:10,background:erHoursSaved>0?"#f0fdf4":"#fef2f2",border:`1px solid ${erHoursSaved>0?"#bbf7d0":"#fecaca"}`}}>
-            <p style={{margin:"0 0 4px",fontSize:11,color:erHoursSaved>0?"#16a34a":"#dc2626",fontWeight:600,textTransform:"uppercase",letterSpacing:".05em"}}>ER hours {erHoursSaved>0?"saved":"added"} vs. baseline</p>
-            <p style={{margin:"0 0 2px",fontSize:22,fontWeight:700,color:erHoursSaved>0?"#16a34a":"#dc2626"}}>
-              {erHoursSaved>0?"-":"+"}  {fmt(Math.abs(erHoursSaved))}h/day
-            </p>
+          <div style={{padding:"12px",borderRadius:10,background:erSaved>0?"#f0fdf4":"#fef2f2",border:`1px solid ${erSaved>0?"#bbf7d0":"#fecaca"}`}}>
+            <p style={{margin:"0 0 4px",fontSize:11,color:erSaved>0?"#16a34a":"#dc2626",fontWeight:600,textTransform:"uppercase",letterSpacing:".05em"}}>ER hours {erSaved>0?"saved":"added"} vs. baseline</p>
+            <p style={{margin:"0 0 2px",fontSize:22,fontWeight:700,color:erSaved>0?"#16a34a":"#dc2626"}}>{erSaved>0?"-":"+"}{fmt(Math.abs(erSaved))}h/day</p>
             <p style={{margin:0,fontSize:11,color:"#94a3b8"}}>from removing {totalRemoved} worker{totalRemoved!==1?"s":""}</p>
           </div>
         </div>
-
-
-        {/* WER legend */}
         <div style={{marginTop:12,display:"flex",gap:8,flexWrap:"wrap"}}>
           <span style={{fontSize:11,color:"#94a3b8",fontWeight:500}}>WER tiers:</span>
-          {[["great",`< ${werThresholds?.great ?? 1.5}% — great, 1.0× multiplier`],["ok","middle — 1.2× multiplier"],["bad",`> ${werThresholds?.bad ?? 3.5}% — bad, 1.5× multiplier`]].map(([t,l])=>(
+          {[["great",`< ${werThresholds?.great??1.5}% — 1.0×`],["ok","middle — 1.2×"],["bad",`> ${werThresholds?.bad??3.5}% — 1.5×`]].map(([t,l])=>(
             <span key={t} style={{display:"inline-flex",alignItems:"center",gap:4,fontSize:11,color:werColor(t)}}>
-              <span style={{width:8,height:8,borderRadius:999,background:werColor(t),display:"inline-block"}} />
-              {l}
+              <span style={{width:8,height:8,borderRadius:999,background:werColor(t),display:"inline-block"}} />{l}
             </span>
           ))}
         </div>
@@ -717,14 +792,14 @@ function WhatIfTab({data,spd,dem,werThresholds}) {
 }
 
 
-// Sensitivity tab
+// ── Sensitivity ──────────────────────────────────────────────────────────────
 function SensitivityTab({sens}) {
   const cc=v=>v>100?"#dc2626":v>85?"#d97706":"#1e293b";
   return (
     <div style={{display:"flex",flexDirection:"column",gap:14}}>
       <Card>
         <Lbl>Utilization vs. demand volume</Lbl>
-        <p style={{margin:"-4px 0 12px",fontSize:12,color:"#94a3b8"}}>Red line = 100% capacity. Amber = 85% recommended ceiling.</p>
+        <p style={{margin:"-4px 0 12px",fontSize:12,color:"#94a3b8"}}>Red = 100% capacity. Amber = 85% recommended ceiling.</p>
         <div style={{height:250}}>
           <ResponsiveContainer width="100%" height="100%">
             <LineChart data={sens}>
@@ -775,7 +850,7 @@ function SensitivityTab({sens}) {
 }
 
 
-// Concentration tab
+// ── Concentration ────────────────────────────────────────────────────────────
 const hhi=arr=>{const tot=arr.reduce((s,v)=>s+v,0);return Math.round(arr.reduce((s,v)=>s+(v/tot*100)**2,0));};
 const hhiLabel=h=>h>2500?"Highly concentrated":h>1500?"Moderately concentrated":"Competitive";
 const hhiColor=h=>h>2500?"#dc2626":h>1500?"#d97706":"#16a34a";
@@ -785,9 +860,9 @@ const concDrop=(arr,n)=>{const s=[...arr].sort((a,b)=>b-a),tot=s.reduce((x,v)=>x
 function ConcentrationTab({data,werThresholds}) {
   const {transcribers,reviewers,ers}=data;
   const groups=[
-    {label:"Transcribers",   hex:"#378ADD", workers:transcribers},
-    {label:"Reviewers",      hex:"#1D9E75", workers:reviewers},
-    {label:"Exec reviewers", hex:"#7F77DD", workers:ers},
+    {label:"Transcribers",   hex:"#378ADD",workers:transcribers},
+    {label:"Reviewers",      hex:"#1D9E75",workers:reviewers},
+    {label:"Exec reviewers", hex:"#7F77DD",workers:ers},
   ];
   const concChart=Array.from({length:11},(_,n)=>({
     n,
@@ -796,9 +871,6 @@ function ConcentrationTab({data,werThresholds}) {
     ER: concDrop(ers.map(w=>w.output),Math.min(n,ers.length)),
   }));
   const lorenz=workers=>{const s=[...workers].sort((a,b)=>b.output-a.output),tot=s.reduce((x,w)=>x+w.output,0);let cum=0;return s.map((w,i)=>{cum+=w.output;return{worker:i+1,share:Math.round(cum/tot*100)};});};
-
-
-  // Volume vs WER scatter data
   const scatterT=transcribers.filter(w=>w.wer!=null).map(w=>({x:w.output,y:+w.wer.toFixed(2),name:w.name}));
   const scatterR=reviewers.filter(w=>w.wer!=null).map(w=>({x:w.output,y:+w.wer.toFixed(2),name:w.name}));
 
@@ -810,7 +882,7 @@ function ConcentrationTab({data,werThresholds}) {
           const h=hhi(workers.map(w=>w.output));
           return (
             <div key={label} style={{padding:"14px",borderRadius:12,background:"white",border:"1px solid #e2e8f0",textAlign:"center"}}>
-              <p style={{margin:"0 0 4px",fontSize:11,fontWeight:700,color:"#94a3b8",textTransform:"uppercase",letterSpacing:".06em"}}>{label}</p>
+              <p style={{margin:"0 0 2px",fontSize:11,fontWeight:700,color:"#94a3b8",textTransform:"uppercase",letterSpacing:".06em"}}>{label}</p>
               <p style={{margin:"0 0 2px",fontSize:11,color:"#94a3b8"}}>Concentration score (HHI)</p>
               <p style={{margin:"0 0 2px",fontSize:28,fontWeight:700,color:hex}}>{h} <span style={{fontSize:13,fontWeight:400,color:"#94a3b8"}}>/ 10,000</span></p>
               <p style={{margin:"0 0 2px",fontSize:12,fontWeight:600,color:hhiColor(h)}}>{hhiLabel(h)}</p>
@@ -819,8 +891,6 @@ function ConcentrationTab({data,werThresholds}) {
           );
         })}
       </div>
-
-
       <Card>
         <Lbl>Remaining capacity if top N workers go inactive</Lbl>
         <div style={{height:220}}>
@@ -840,30 +910,25 @@ function ConcentrationTab({data,werThresholds}) {
           </ResponsiveContainer>
         </div>
       </Card>
-
-
-      {/* Volume vs WER scatter */}
       {(scatterT.length>0||scatterR.length>0)&&(
         <Card>
           <Lbl>Volume vs. WER — quality scatter</Lbl>
-          <p style={{margin:"-4px 0 6px",fontSize:12,color:"#64748b"}}>
-            Bottom right = high volume, low WER — your stars. Top right = high volume, high WER — hidden ER cost.
-          </p>
+          <p style={{margin:"-4px 0 6px",fontSize:12,color:"#64748b"}}>Bottom right = high volume, low WER — stars. Top right = high volume, high WER — hidden ER cost.</p>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:14}}>
-            {[["Transcribers",scatterT,"#378ADD"],[" Reviewers",scatterR,"#1D9E75"]].map(([lbl,sData,hex])=>sData.length>0&&(
+            {[["Transcribers",scatterT,"#378ADD"],["Reviewers",scatterR,"#1D9E75"]].map(([lbl,sData,hex])=>sData.length>0&&(
               <div key={lbl}>
                 <p style={{margin:"0 0 8px",fontSize:12,fontWeight:600,color:hex}}>{lbl}</p>
                 <div style={{height:200}}>
                   <ResponsiveContainer width="100%" height="100%">
                     <ScatterChart margin={{top:10,right:10,bottom:20,left:10}}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#f1f5f9" />
-                      <XAxis dataKey="x" name="Subtasks" tick={{fontSize:10,fill:"#94a3b8"}} label={{value:"Output",position:"insideBottom",offset:-10,fontSize:10,fill:"#94a3b8"}} />
+                      <XAxis dataKey="x" name="Output" tick={{fontSize:10,fill:"#94a3b8"}} label={{value:"Output",position:"insideBottom",offset:-10,fontSize:10,fill:"#94a3b8"}} />
                       <YAxis dataKey="y" name="WER %" tick={{fontSize:10,fill:"#94a3b8"}} label={{value:"WER %",angle:-90,position:"insideLeft",fontSize:10,fill:"#94a3b8"}} />
                       <ZAxis range={[40,40]} />
                       <ReferenceLine y={werThresholds?.great??1.5} stroke="#16a34a" strokeDasharray="4 2" />
                       <ReferenceLine y={werThresholds?.bad??3.5}   stroke="#dc2626" strokeDasharray="4 2" />
                       <Tooltip cursor={{strokeDasharray:"3 3"}} content={({payload})=>{
-                        if(!payload?.length) return null;
+                        if(!payload?.length)return null;
                         const d=payload[0].payload;
                         return <div style={{background:"white",border:"1px solid #e2e8f0",borderRadius:8,padding:"6px 10px",fontSize:12}}><b>{d.name}</b><br/>Output: {d.x}<br/>WER: {d.y}%</div>;
                       }} />
@@ -876,8 +941,6 @@ function ConcentrationTab({data,werThresholds}) {
           </div>
         </Card>
       )}
-
-
       <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:14}}>
         {groups.map(({label,hex,workers})=>{
           const tot=workers.reduce((s,w)=>s+w.output,0);
@@ -917,21 +980,21 @@ function ConcentrationTab({data,werThresholds}) {
 }
 
 
-// Root
+// ── Root ─────────────────────────────────────────────────────────────────────
 export default function App() {
-  const [session,setSession]=useState(null), [checking,setChecking]=useState(true);
-  const [data,setData]=useState(null), [manualMode,setManualMode]=useState(false);
+  const [session,setSession]=useState(null),[checking,setChecking]=useState(true);
+  const [data,setData]=useState(null),[manualMode,setManualMode]=useState(false);
 
 
   useEffect(()=>{
     supabase.auth.getSession().then(({data:{session}})=>{setSession(session);setChecking(false);});
-    const {data:{subscription}}=supabase.auth.onAuthStateChange((_e,s)=>setSession(s));
-    return ()=>subscription.unsubscribe();
+    const{data:{subscription}}=supabase.auth.onAuthStateChange((_e,s)=>setSession(s));
+    return()=>subscription.unsubscribe();
   },[]);
 
 
-  if(checking) return <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"#f8fafc",fontSize:14,color:"#94a3b8"}}>Loading…</div>;
-  if(!session) return <LoginScreen />;
-  if(!data||manualMode) return <UploadScreen defaultMode={manualMode?"manual":null} onDataLoaded={d=>{setData(d);setManualMode(false);}} />;
-  return <ModelApp data={data} onReload={()=>{setData(null);setManualMode(false);}} onManual={()=>setManualMode(true)} onSignOut={()=>supabase.auth.signOut()} />;
+  if(checking)return<div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"#f8fafc",fontSize:14,color:"#94a3b8"}}>Loading…</div>;
+  if(!session)return<LoginScreen/>;
+  if(!data||manualMode)return<UploadScreen defaultMode={manualMode?"manual":null} onDataLoaded={d=>{setData(d);setManualMode(false);}}/>;
+  return<ModelApp data={data} onReload={()=>{setData(null);setManualMode(false);}} onManual={()=>setManualMode(true)} onSignOut={()=>supabase.auth.signOut()}/>;
 }
