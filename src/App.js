@@ -76,13 +76,15 @@ function computeLP(dem, tOut, rOut, erOut, spd, days, avgAudioMin) {
   const totalDem = dem.surge+dem.three+dem.seven;
   const avgMin = avgAudioMin>0 ? avgAudioMin
     : totalDem>0 ? TIERS.reduce((s,t)=>s+(dem[t.id]/totalDem*t.avgMin),0) : 50;
+  // Subtasks derived from audio minutes: total_audio_min / 15 min per subtask
+  const subtasksPerTranscript = avgMin / 15;
   const supH = {
     t:  daily(tOut)/spd.t,
     r:  (daily(rOut)*avgMin)/spd.r,
     er: (daily(erOut)*avgMin)/spd.er,
   };
   const tiers = TIERS.map(t=>{
-    const D=dem[t.id],tau=t.avgSubtasks/spd.t,rho=avgMin/spd.r,eps=avgMin/spd.er;
+    const D=dem[t.id],tau=subtasksPerTranscript/spd.t,rho=avgMin/spd.r,eps=avgMin/spd.er;
     return {...t,D,tau,rho,eps,demT:D*tau,demR:D*rho,demE:D*eps};
   });
   const demH = {t:tiers.reduce((s,t)=>s+t.demT,0),r:tiers.reduce((s,t)=>s+t.demR,0),er:tiers.reduce((s,t)=>s+t.demE,0)};
@@ -417,9 +419,9 @@ function ResultsTab({lp,rec,avgAudioMin,dailyTranscripts,dailyAudioMin,vol}) {
 
       {/* Staffing recommendations */}
       <Card>
-        <Lbl>Staffing recommendations</Lbl>
+        <Lbl>IC recommendations</Lbl>
         <p style={{margin:"-4px 0 14px",fontSize:12,color:"#64748b"}}>
-          Based on current demand and average hours per worker in your pool. Assumes new workers contribute at the same average rate.
+          Based on current demand and average hours per IC in your pool. Assumes new ICs contribute at the same average rate.
         </p>
         <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:12}}>
           {ROLE_META.map(role=>{
@@ -438,7 +440,7 @@ function ResultsTab({lp,rec,avgAudioMin,dailyTranscripts,dailyAudioMin,vol}) {
                   {ok?`✓ ${Math.abs(r.gap)} surplus`:`+${r.gap} needed`}
                 </div>
                 <p style={{margin:"8px 0 0",fontSize:11,color:"#94a3b8"}}>
-                  avg {fmt(r.avgHrsPerWorker)}h/worker/day
+                  avg {fmt(r.avgHrsPerWorker)}h/IC/day
                 </p>
               </div>
             );
@@ -546,6 +548,7 @@ function ConfigureTab({dem,spd,wer,vol,lp,totalDem,upD,upS,upV,setWer,data,avgAu
             {label:"Daily transcripts",val:`${dailyTranscripts.toFixed(1)}/day`,hex:"#378ADD"},
             {label:"Daily audio minutes",val:`${Math.round(dailyAudioMin)} min/day`,hex:"#1D9E75"},
             {label:"Avg audio min / transcript",val:`${Math.round(avgAudioMin)} min`,hex:"#7F77DD"},
+            {label:"Subtasks per transcript",val:`${(avgAudioMin/15).toFixed(1)} subtasks`,hex:"#378ADD"},
           ].map(({label,val,hex})=>(
             <div key={label} style={{padding:"10px 12px",borderRadius:8,background:"#f8fafc",border:"1px solid #e2e8f0"}}>
               <p style={{margin:"0 0 4px",fontSize:11,color:"#94a3b8",fontWeight:600,textTransform:"uppercase",letterSpacing:".05em"}}>{label}</p>
